@@ -1,0 +1,22 @@
+{
+  "name": "chris-ikuzo-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^4.1.0",
+    "pg": "^8.13.0",
+    "redis": "^6.3.0",
+    "uuid": "^11.0.0",
+    "zod": "^3.23.8"
+  }
+}
