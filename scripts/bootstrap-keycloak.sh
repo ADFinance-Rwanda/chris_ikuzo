@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KEYCLOAK_URL=${KEYCLOAK_URL:-http://localhost:8080}
+KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
+KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+REALM=${KEYCLOAK_REALM:-chris-ikuzo}
+APP_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-app-backend}
+APP_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-changeme}
+FRONTEND_CLIENT_ID=${KEYCLOAK_FRONTEND_CLIENT_ID:-frontend}
+DEMO_USERNAME=${KEYCLOAK_DEMO_USERNAME:-demo-user}
+DEMO_PASSWORD=${KEYCLOAK_DEMO_PASSWORD:-Password123!}
+
+if ! docker ps --format '{{.Names}}' | grep -q '^chris-ikuzo-keycloak$'; then
+  echo "Keycloak container is not running. Start the stack first: docker compose up -d postgres redis keycloak" >&2
+  exit 1
+fi
+
+kcadm() {
+  docker exec chris-ikuzo-keycloak /opt/keycloak/bin/kcadm.sh "$@"
+}
+
+kcadm config credentials --server "$KEYCLOAK_URL" --realm master --user "$KEYCLOAK_ADMIN" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null
+
+if ! kcadm get realms/${REALM} >/dev/null 2>&1; then
+  echo "Creating realm ${REALM}..."
+  kcadm create realms -s realm="$REALM" -s enabled=true >/dev/null
+fi
+
+app_client_id=$(kcadm get clients -r "$REALM" --fields id,clientId --format csv | awk -F',' -v target="$APP_CLIENT_ID" '$2 == "\"" target "\"" {gsub(/"/, "", $1); print $1; exit}')
+if [[ -z "${app_client_id}" ]]; then
+  echo "Creating client ${APP_CLIENT_ID}..."
+  kcadm create clients -r "$REALM" \
+    -s clientId="$APP_CLIENT_ID" \
+    -s secret="$APP_CLIENT_SECRET" \
+    -s publicClient=false \
+    -s directAccessGrantsEnabled=true \
+    -s serviceAccountsEnabled=true \
+    -s standardFlowEnabled=true \
+    -s 'redirectUris=["http://localhost:8080/*","http://localhost:3000/*","http://localhost:5173/*"]' \
+    -s 'webOrigins=["+","http://localhost:3000","http://localhost:5173"]' \
+    >/dev/null
+  app_client_id=$(kcadm get clients -r "$REALM" --fields id,clientId --format csv | awk -F',' -v target="$APP_CLIENT_ID" '$2 == "\"" target "\"" {gsub(/"/, "", $1); print $1; exit}')
+fi
+
+kcadm update clients/${app_client_id} -r "$REALM" -s "secret=${APP_CLIENT_SECRET}" -s 'publicClient=false' -s 'directAccessGrantsEnabled=true' -s 'serviceAccountsEnabled=true' -s 'standardFlowEnabled=true' >/dev/null
+
+has_audience_mapper=$(kcadm get "clients/${app_client_id}/protocol-mappers/models" -r "$REALM" --fields id,name --format json | grep -q 'app-backend-audience' && echo true || echo false)
+if [[ "$has_audience_mapper" != "true" ]]; then
+  echo "Adding audience mapper for ${APP_CLIENT_ID}..."
+  kcadm create "clients/${app_client_id}/protocol-mappers/models" -r "$REALM" \
+    -s "name=app-backend-audience" \
+    -s "protocol=openid-connect" \
+    -s "protocolMapper=oidc-audience-mapper" \
+    -s 'config."included.client.audience"=app-backend' \
+    -s 'config."access.token.claim"=true' \
+    -s 'config."id.token.claim"=false' \
+    >/dev/null
+fi
+
+frontend_client_id=$(kcadm get clients -r "$REALM" --fields id,clientId --format csv | awk -F',' -v target="$FRONTEND_CLIENT_ID" '$2 == "\"" target "\"" {gsub(/"/, "", $1); print $1; exit}')
+if [[ -z "${frontend_client_id}" ]]; then
+  echo "Creating frontend client ${FRONTEND_CLIENT_ID}..."
+  kcadm create clients -r "$REALM" \
+    -s clientId="$FRONTEND_CLIENT_ID" \
+    -s publicClient=true \
+    -s 'redirectUris=["http://localhost:3000/*","http://localhost:5173/*"]' \
+    -s 'webOrigins=["+","http://localhost:3000","http://localhost:5173"]' \
+    >/dev/null
+  frontend_client_id=$(kcadm get clients -r "$REALM" --fields id,clientId --format csv | awk -F',' -v target="$FRONTEND_CLIENT_ID" '$2 == "\"" target "\"" {gsub(/"/, "", $1); print $1; exit}')
+fi
+
+for role in admin manager member; do
+  if ! kcadm get roles -r "$REALM" --fields name --format csv | grep -q "\"${role}\""; then
+    echo "Creating role ${role}..."
+    kcadm create roles -r "$REALM" -s "name=${role}" >/dev/null
+  fi
+done
+
+if ! kcadm get users -r "$REALM" --fields username --format csv | grep -q "\"${DEMO_USERNAME}\""; then
+  echo "Creating user ${DEMO_USERNAME}..."
+  kcadm create users -r "$REALM" \
+    -s username="$DEMO_USERNAME" \
+    -s enabled=true \
+    -s firstName=Demo \
+    -s lastName=User \
+    >/dev/null
+fi
+
+user_id=$(kcadm get users -r "$REALM" --fields id,username --format csv | awk -F',' -v target="$DEMO_USERNAME" '$2 == "\"" target "\"" {gsub(/"/, "", $1); print $1; exit}')
+if [[ -n "${user_id}" ]]; then
+  kcadm set-password -r "$REALM" --username "$DEMO_USERNAME" --new-password "$DEMO_PASSWORD" >/dev/null
+fi
+
+echo "Keycloak bootstrap is ready for ${REALM}."
+echo "Audience: ${APP_CLIENT_ID}"
+echo "Client secret: ${APP_CLIENT_SECRET}"
+echo "Demo user: ${DEMO_USERNAME} / ${DEMO_PASSWORD}"
