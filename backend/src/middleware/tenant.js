@@ -1,8 +1,22 @@
+function sendForbidden(res, message) {
+  if (!res) {
+    return null;
+  }
+
+  if (typeof res.status === 'function') {
+    return res.status(403).json({ error: message });
+  }
+
+  res.statusCode = 403;
+  res.payload = { error: message };
+  return res;
+}
+
 function requireTenant(req, res, next) {
   const organizationId = req.user?.organizationId || req.user?.orgId;
 
   if (!organizationId) {
-    return res.status(403).json({ error: 'Tenant context missing from authenticated user' });
+    return sendForbidden(res, 'Tenant context missing from authenticated user');
   }
 
   req.user.organizationId = String(organizationId);
@@ -18,11 +32,11 @@ function enforceTenantScope(req, res, next) {
   const tenantId = req.tenantId || req.organizationId || req.user?.organizationId || req.user?.orgId;
 
   if (requestedOrgId && String(requestedOrgId) !== String(tenantId)) {
-    return res.status(403).json({ error: 'Organization mismatch' });
+    return sendForbidden(res, 'Organization mismatch');
   }
 
   if (!tenantId) {
-    return res.status(403).json({ error: 'No organization context available' });
+    return sendForbidden(res, 'No organization context available');
   }
 
   req.tenantId = String(tenantId);
