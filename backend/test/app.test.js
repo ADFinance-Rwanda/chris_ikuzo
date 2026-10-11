@@ -13,6 +13,6 @@ async function getHealth() {
 test('health endpoint returns a status payload', async () => {
   const result = await getHealth();
   assert.equal(result.status, 200);
-  assert.equal(result.body.status, 'ok');
+  assert.ok(['ok', 'degraded'].includes(result.body.status));
   await new Promise((resolve) => server.close(resolve));
 });

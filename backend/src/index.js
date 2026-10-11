@@ -9,13 +9,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.get('/health', async (req, res) => {
+async function getDependencyHealth() {
   const dbStatus = await checkDatabase();
   const redisStatus = await redisPing();
+  const ready = dbStatus === 'ok' && redisStatus === 'PONG';
+
+  return { dbStatus, redisStatus, ready };
+}
+
+app.get('/health', async (req, res) => {
+  const { dbStatus, redisStatus, ready } = await getDependencyHealth();
   res.json({
-    status: 'ok',
+    status: ready ? 'ok' : 'degraded',
     database: dbStatus,
     redis: redisStatus,
+    ready,
     app: config.app.name,
     environment: config.nodeEnv
   });
@@ -23,14 +31,13 @@ app.get('/health', async (req, res) => {
 
 app.get('/ready', async (req, res) => {
   try {
-    const dbStatus = await checkDatabase();
-    const redisStatus = await redisPing();
-    if (dbStatus === 'ok' && redisStatus === 'PONG') {
-      return res.json({ status: 'ready' });
+    const { dbStatus, redisStatus, ready } = await getDependencyHealth();
+    if (ready) {
+      return res.json({ status: 'ready', database: dbStatus, redis: redisStatus, app: config.app.name, environment: config.nodeEnv });
     }
-    return res.status(503).json({ status: 'not ready', database: dbStatus, redis: redisStatus });
+    return res.status(503).json({ status: 'not ready', database: dbStatus, redis: redisStatus, app: config.app.name, environment: config.nodeEnv });
   } catch (error) {
-    return res.status(503).json({ status: 'not ready', error: error.message });
+    return res.status(503).json({ status: 'not ready', error: error.message, app: config.app.name, environment: config.nodeEnv });
   }
 });
 
