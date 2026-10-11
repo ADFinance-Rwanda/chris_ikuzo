@@ -11,6 +11,7 @@ const {
   updateTask,
   deleteTask
 } = require('../services/taskRepository');
+const { getIdempotencyRecord, storeIdempotencyRecord } = require('../services/idempotency');
 
 const router = express.Router();
 
@@ -70,6 +71,14 @@ router.post('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 6
 
   const organizationId = req.organizationId;
   const idempotencyKey = parsed.data.idempotency_key || req.headers['x-idempotency-key'];
+
+  if (idempotencyKey) {
+    const cached = await getIdempotencyRecord({ organizationId, key: idempotencyKey });
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+  }
+
   const { task, duplicate } = await createTask({
     organizationId,
     data: { ...parsed.data, idempotency_key: idempotencyKey || parsed.data.idempotency_key || null },
@@ -77,6 +86,9 @@ router.post('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 6
   });
 
   if (duplicate) {
+    if (idempotencyKey) {
+      await storeIdempotencyRecord({ organizationId, key: idempotencyKey, response: task, ttlSeconds: 86400 });
+    }
     return res.status(200).json(task);
   }
 
@@ -88,6 +100,10 @@ router.post('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 6
     resourceId: task.id,
     metadata: { title: task.title, idempotency_key: idempotencyKey || null }
   });
+
+  if (idempotencyKey) {
+    await storeIdempotencyRecord({ organizationId, key: idempotencyKey, response: task, ttlSeconds: 86400 });
+  }
 
   return res.status(201).json(task);
 });
