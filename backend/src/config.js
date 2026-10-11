@@ -8,7 +8,8 @@ const config = {
   keycloak: {
     issuer: process.env.KEYCLOAK_ISSUER || 'http://localhost:8080/realms/master',
     audience: process.env.KEYCLOAK_CLIENT_ID || 'app-backend',
-    jwksUri: process.env.KEYCLOAK_JWKS_URI || 'http://localhost:8080/realms/master/protocol/openid-connect/certs'
+    jwksUri: process.env.KEYCLOAK_JWKS_URI || 'http://localhost:8080/realms/master/protocol/openid-connect/certs',
+    realm: process.env.KEYCLOAK_REALM || 'master'
   },
   app: {
     name: 'chris-ikuzo-backend'

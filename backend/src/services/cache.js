@@ -74,4 +74,4 @@ async function increment(key) {
   }
 }
 
-module.exports = { connect, ping, get, set, increment };
+module.exports = { getClient, connect, ping, get, set, increment };

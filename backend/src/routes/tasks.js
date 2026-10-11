@@ -16,7 +16,8 @@ const taskSchema = z.object({
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'),
   assignee_id: z.string().min(1).optional().nullable(),
   due_date: z.string().datetime({ offset: true }).optional().nullable(),
-  version: z.number().int().nonnegative().optional()
+  version: z.number().int().nonnegative().optional(),
+  idempotency_key: z.string().min(1).max(255).optional()
 });
 
 const updateTaskSchema = taskSchema.partial();
@@ -72,12 +73,22 @@ router.post('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 6
   }
 
   const organizationId = req.organizationId;
+  const idempotencyKey = parsed.data.idempotency_key || req.headers['x-idempotency-key'];
+
+  if (idempotencyKey) {
+    const existingKey = Array.from(taskStore.values()).find((task) => task.organization_id === organizationId && task.idempotency_key === idempotencyKey);
+    if (existingKey) {
+      return res.status(200).json(existingKey);
+    }
+  }
+
   const taskId = uuidv4();
   const now = new Date().toISOString();
   const task = normalizeTask({
     id: taskId,
     organization_id: organizationId,
     ...parsed.data,
+    idempotency_key: idempotencyKey || null,
     created_at: now,
     updated_at: now,
     version: 1
@@ -90,7 +101,7 @@ router.post('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 6
     action: 'create',
     resourceType: 'task',
     resourceId: taskId,
-    metadata: { title: task.title }
+    metadata: { title: task.title, idempotency_key: idempotencyKey || null }
   });
 
   res.status(201).json(task);

@@ -38,8 +38,8 @@ function verifyAccessToken(token) {
 }
 
 function extractUserContext(payload) {
-  const orgId = payload.org_id || payload.organization_id || payload.tenant_id || payload['organization-id'];
-  const roles = payload.realm_access?.roles || payload.resource_access?.[config.keycloak.audience]?.roles || [];
+  const orgId = payload.org_id || payload.organization_id || payload.tenant_id || payload['organization-id'] || payload.organizations?.[0]?.id;
+  const roles = payload.realm_access?.roles || payload.resource_access?.[config.keycloak.audience]?.roles || payload.roles || [];
 
   return {
     sub: payload.sub,

@@ -1,4 +1,4 @@
-const { getClient } = require('./cache');
+const { getClient, connect } = require('./cache');
 
 async function addAuditLog({ organizationId, userId, action, resourceType, resourceId, metadata = {} }) {
   const redisClient = getClient();
@@ -14,8 +14,9 @@ async function addAuditLog({ organizationId, userId, action, resourceType, resou
   };
 
   try {
-    await redisClient.lPush(`audit:${organizationId}`, JSON.stringify(entry));
-    await redisClient.lTrim(`audit:${organizationId}`, 0, 999);
+    const client = await connect();
+    await client.lPush(`audit:${organizationId}`, JSON.stringify(entry));
+    await client.lTrim(`audit:${organizationId}`, 0, 999);
   } catch (error) {
     // graceful degradation for audit logging
   }
