@@ -1,10 +1,16 @@
 const express = require('express');
 const { z } = require('zod');
-const { v4: uuidv4 } = require('uuid');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { requireTenant, enforceTenantScope } = require('../middleware/tenant');
 const { rateLimit } = require('../middleware/rateLimit');
 const { addAuditLog } = require('../services/audit');
+const {
+  listTasks,
+  getTask,
+  createTask,
+  updateTask,
+  deleteTask
+} = require('../services/taskRepository');
 
 const router = express.Router();
 
@@ -22,41 +28,31 @@ const taskSchema = z.object({
 
 const updateTaskSchema = taskSchema.partial();
 
-const taskStore = new Map();
-
-function normalizeTask(task, organizationId) {
-  return {
-    ...task,
-    organization_id: organizationId,
-    version: task.version ?? 1,
-    created_at: task.created_at || new Date().toISOString(),
-    updated_at: task.updated_at || new Date().toISOString()
-  };
-}
-
 router.use(requireAuth, requireTenant, enforceTenantScope);
 
 router.get('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 120, windowSeconds: 60 }), async (req, res) => {
   const organizationId = req.organizationId;
-  const tasks = Array.from(taskStore.values())
-    .filter((task) => task.organization_id === organizationId)
-    .map((task) => ({ ...task, organization_id: organizationId }));
-
   const page = Number(req.query.page || 1);
   const limit = Number(req.query.limit || 20);
   const status = req.query.status;
   const projectId = req.query.project_id;
+  const priority = req.query.priority;
+  const assigneeId = req.query.assignee_id;
+  const search = req.query.search;
 
-  let filtered = tasks;
-  if (status) filtered = filtered.filter((task) => task.status === status);
-  if (projectId) filtered = filtered.filter((task) => task.project_id === projectId);
+  const { rows, total } = await listTasks({
+    organizationId,
+    page,
+    limit,
+    status,
+    projectId,
+    priority,
+    assigneeId,
+    search
+  });
 
-  const total = filtered.length;
-  const start = (page - 1) * limit;
-  const paged = filtered.slice(start, start + limit);
-
-  res.json({
-    data: paged,
+  return res.json({
+    data: rows,
     pagination: {
       page,
       limit,
@@ -74,90 +70,73 @@ router.post('/', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 6
 
   const organizationId = req.organizationId;
   const idempotencyKey = parsed.data.idempotency_key || req.headers['x-idempotency-key'];
+  const { task, duplicate } = await createTask({
+    organizationId,
+    data: { ...parsed.data, idempotency_key: idempotencyKey || parsed.data.idempotency_key || null },
+    userId: req.user?.sub
+  });
 
-  if (idempotencyKey) {
-    const existingKey = Array.from(taskStore.values()).find((task) => task.organization_id === organizationId && task.idempotency_key === idempotencyKey);
-    if (existingKey) {
-      return res.status(200).json(existingKey);
-    }
+  if (duplicate) {
+    return res.status(200).json(task);
   }
 
-  const taskId = uuidv4();
-  const now = new Date().toISOString();
-  const task = normalizeTask({
-    id: taskId,
-    organization_id: organizationId,
-    ...parsed.data,
-    idempotency_key: idempotencyKey || null,
-    created_at: now,
-    updated_at: now,
-    version: 1
-  }, organizationId);
-
-  taskStore.set(taskId, task);
   await addAuditLog({
     organizationId,
     userId: req.user?.sub,
     action: 'create',
     resourceType: 'task',
-    resourceId: taskId,
+    resourceId: task.id,
     metadata: { title: task.title, idempotency_key: idempotencyKey || null }
   });
 
-  res.status(201).json(task);
+  return res.status(201).json(task);
 });
 
-router.get('/:id', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 120, windowSeconds: 60 }), (req, res) => {
-  const task = taskStore.get(req.params.id);
-  if (!task || task.organization_id !== req.organizationId) {
+router.get('/:id', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 120, windowSeconds: 60 }), async (req, res) => {
+  const task = await getTask(req.organizationId, req.params.id);
+  if (!task) {
     return res.status(404).json({ error: 'Task not found' });
   }
-  res.json(task);
+  return res.json(task);
 });
 
 router.put('/:id', requireRole('admin', 'manager', 'member'), rateLimit({ limit: 60, windowSeconds: 60 }), async (req, res) => {
-  const existing = taskStore.get(req.params.id);
-  if (!existing || existing.organization_id !== req.organizationId) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-
-  const requestedVersion = Number(req.body?.version ?? existing.version);
-  if (requestedVersion !== existing.version) {
-    return res.status(409).json({ error: 'Conflict: task version mismatch' });
-  }
-
   const parsed = updateTaskSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: 'Invalid task update payload', details: parsed.error.issues });
   }
 
-  const updatedTask = normalizeTask({
-    ...existing,
-    ...parsed.data,
-    version: existing.version + 1,
-    updated_at: new Date().toISOString()
-  }, req.organizationId);
+  const { found, conflict, task } = await updateTask({
+    organizationId: req.organizationId,
+    taskId: req.params.id,
+    payload: parsed.data
+  });
 
-  taskStore.set(req.params.id, updatedTask);
+  if (!found) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  if (conflict) {
+    return res.status(409).json({ error: 'Conflict: task version mismatch' });
+  }
+
   await addAuditLog({
     organizationId: req.organizationId,
     userId: req.user?.sub,
     action: 'update',
     resourceType: 'task',
     resourceId: req.params.id,
-    metadata: { version: updatedTask.version }
+    metadata: { version: task.version }
   });
 
-  res.json(updatedTask);
+  return res.json(task);
 });
 
 router.delete('/:id', requireRole('admin', 'manager'), rateLimit({ limit: 60, windowSeconds: 60 }), async (req, res) => {
-  const task = taskStore.get(req.params.id);
-  if (!task || task.organization_id !== req.organizationId) {
+  const { found, task } = await deleteTask(req.organizationId, req.params.id);
+  if (!found) {
     return res.status(404).json({ error: 'Task not found' });
   }
 
-  taskStore.delete(req.params.id);
   await addAuditLog({
     organizationId: req.organizationId,
     userId: req.user?.sub,
@@ -166,7 +145,8 @@ router.delete('/:id', requireRole('admin', 'manager'), rateLimit({ limit: 60, wi
     resourceId: req.params.id,
     metadata: {}
   });
-  res.status(204).send();
+
+  return res.status(204).send();
 });
 
 module.exports = router;
