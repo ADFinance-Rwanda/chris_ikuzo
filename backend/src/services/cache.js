@@ -9,12 +9,12 @@ function getClient() {
       url: config.redisUrl,
       socket: {
         reconnectStrategy: false,
-        connectTimeout: 250,
+        connectTimeout: 1000,
         lazyConnect: true
       }
     });
-    client.on('error', (err) => {
-      console.warn('Redis client error:', err.message || 'redis unavailable');
+    client.on('error', (error) => {
+      console.error('Redis client error:', error.message);
     });
   }
   return client;
@@ -22,56 +22,42 @@ function getClient() {
 
 async function connect() {
   const redisClient = getClient();
-  if (!redisClient.isOpen) {
-    try {
-      await redisClient.connect();
-    } catch (error) {
-      return redisClient;
-    }
-  }
+  if (!redisClient.isOpen) await redisClient.connect();
   return redisClient;
 }
 
 async function ping() {
   try {
-    const redisClient = await connect();
-    return await redisClient.ping();
-  } catch (error) {
+    return await (await connect()).ping();
+  } catch {
     return 'unavailable';
   }
 }
 
 async function get(key) {
   try {
-    const redisClient = await connect();
-    const value = await redisClient.get(key);
+    const value = await (await connect()).get(key);
     return value ? JSON.parse(value) : null;
   } catch (error) {
+    console.warn('Redis cache read failed:', error.message);
     return null;
   }
 }
 
 async function set(key, value, expirySeconds) {
   try {
-    const redisClient = await connect();
+    const client = await connect();
     const serialized = JSON.stringify(value);
     if (expirySeconds) {
-      await redisClient.set(key, serialized, { EX: expirySeconds });
-      return;
+      await client.set(key, serialized, { EX: expirySeconds });
+    } else {
+      await client.set(key, serialized);
     }
-    await redisClient.set(key, serialized);
+    return true;
   } catch (error) {
-    // graceful degradation
+    console.warn('Redis cache write failed:', error.message);
+    return false;
   }
 }
 
-async function increment(key) {
-  try {
-    const redisClient = await connect();
-    return await redisClient.incr(key);
-  } catch (error) {
-    return 0;
-  }
-}
-
-module.exports = { getClient, connect, ping, get, set, increment };
+module.exports = { getClient, connect, ping, get, set };

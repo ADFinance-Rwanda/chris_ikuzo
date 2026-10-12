@@ -2,7 +2,7 @@ require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env'
 
 const realm = process.env.KEYCLOAK_REALM || 'chris-ikuzo';
 const clientId = process.env.KEYCLOAK_CLIENT_ID || 'app-backend';
-const configuredAudiences = (process.env.KEYCLOAK_ALLOWED_AUDIENCES || `${clientId},account`)
+const configuredAudiences = (process.env.KEYCLOAK_ALLOWED_AUDIENCES || clientId)
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);

@@ -1,27 +1,19 @@
-const { getClient, connect } = require('./cache');
+const { v4: uuidv4 } = require('uuid');
 
-async function addAuditLog({ organizationId, userId, action, resourceType, resourceId, metadata = {} }) {
-  const redisClient = getClient();
-  const entry = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    organization_id: organizationId,
-    user_id: userId,
-    action,
-    resource_type: resourceType,
-    resource_id: resourceId,
-    metadata,
-    created_at: new Date().toISOString()
-  };
-
-  try {
-    const client = await connect();
-    await client.lPush(`audit:${organizationId}`, JSON.stringify(entry));
-    await client.lTrim(`audit:${organizationId}`, 0, 999);
-  } catch (error) {
-    // graceful degradation for audit logging
-  }
-
-  return entry;
+async function insertAuditLog(client, {
+  organizationId,
+  userId,
+  action,
+  entityType,
+  entityId,
+  metadata = {}
+}) {
+  await client.query(
+    `INSERT INTO task_audit_logs
+      (id, organization_id, user_id, action, resource_type, resource_id, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [uuidv4(), organizationId, userId || null, action, entityType, String(entityId), JSON.stringify(metadata)]
+  );
 }
 
-module.exports = { addAuditLog };
+module.exports = { insertAuditLog };

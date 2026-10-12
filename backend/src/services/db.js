@@ -1,26 +1,34 @@
-const { Client } = require('pg');
+const { Pool } = require('pg');
 const config = require('../config');
 
-let client;
+const pool = new Pool({
+  connectionString: config.databaseUrl,
+  max: Number(process.env.DATABASE_POOL_SIZE || 10),
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000
+});
 
-function getClient() {
-  if (!client) {
-    client = new Client({ connectionString: config.databaseUrl });
+pool.on('error', (error) => {
+  console.error('Unexpected PostgreSQL pool error:', error.message);
+});
+
+function query(text, params = []) {
+  return pool.query(text, params);
+}
+
+async function withTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-  return client;
 }
 
-async function connect() {
-  const dbClient = getClient();
-  if (!dbClient._connected) {
-    await dbClient.connect();
-  }
-  return dbClient;
-}
-
-async function query(text, params = []) {
-  const dbClient = await connect();
-  return dbClient.query(text, params);
-}
-
-module.exports = { connect, query };
+module.exports = { pool, query, withTransaction };

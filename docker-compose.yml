@@ -1,27 +1,26 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: chris-ikuzo-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-appdb}
       POSTGRES_USER: ${POSTGRES_USER:-appuser}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      KEYCLOAK_DB: ${KEYCLOAK_DB:-keycloak}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-appuser} -d ${POSTGRES_DB:-appdb}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - app-network
+    networks: [app-network]
 
   redis:
     image: redis:7-alpine
-    container_name: chris-ikuzo-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
@@ -33,41 +32,104 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - app-network
+    networks: [app-network]
 
   keycloak:
-    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:latest}
-    container_name: chris-ikuzo-keycloak
+    image: ${KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.2}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
-    command: ["start-dev"]
+    command: ["start-dev", "--health-enabled=true", "--http-port=8080"]
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-appdb}
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB:-keycloak}
       KC_DB_USERNAME: ${POSTGRES_USER:-appuser}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       KC_HOSTNAME: localhost
-      KC_HTTP_PORT: 8080
-      KC_HEALTH_ENABLED: "true"
       KC_HOSTNAME_STRICT: "false"
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?Set KEYCLOAK_ADMIN in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?Set KEYCLOAK_ADMIN_PASSWORD in .env}
     ports:
       - "8080:8080"
+      - "9000:9000"
     volumes:
       - keycloak_data:/opt/keycloak/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/health/ready || exit 1"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000"]
       interval: 15s
       timeout: 10s
       retries: 10
-    networks:
-      - app-network
+    networks: [app-network]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgres://${APP_DB_USER:-app_runtime}:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-appdb}
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_USER:-appuser}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-appdb}
+      RUNTIME_DB_USER: ${APP_DB_USER:-app_runtime}
+      RUNTIME_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
+      REDIS_URL: redis://redis:6379
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-chris-ikuzo}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-app-backend}
+      KEYCLOAK_ISSUER: http://localhost:8080/realms/${KEYCLOAK_REALM:-chris-ikuzo}
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/realms/${KEYCLOAK_REALM:-chris-ikuzo}/protocol/openid-connect/certs
+      CORS_ORIGINS: http://localhost,http://localhost:3000,http://localhost:5173
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [app-network]
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["node", "backend/src/worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${APP_DB_USER:-app_runtime}:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-appdb}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [app-network]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_KEYCLOAK_URL: http://localhost:8080
+        VITE_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-chris-ikuzo}
+        VITE_KEYCLOAK_CLIENT_ID: ${KEYCLOAK_FRONTEND_CLIENT_ID:-frontend}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [app-network]
 
 volumes:
   postgres_data:

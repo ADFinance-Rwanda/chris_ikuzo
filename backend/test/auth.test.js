@@ -18,7 +18,7 @@ test('extractUserContext resolves tenant and roles from Keycloak user claims', (
 
   assert.equal(context.sub, 'user-123');
   assert.equal(context.orgId, 'org-42');
-  assert.deepEqual(context.roles, ['member', 'admin']);
+  assert.deepEqual(context.roles, ['MEMBER', 'ORG_ADMIN']);
   assert.equal(context.username, 'demo-user');
 });
 
@@ -33,5 +33,5 @@ test('extractUserContext accepts alternate tenant claim names', () => {
   const context = extractUserContext(payload);
 
   assert.equal(context.orgId, 'tenant-9');
-  assert.deepEqual(context.roles, ['manager']);
+  assert.deepEqual(context.roles, ['PROJECT_MANAGER']);
 });

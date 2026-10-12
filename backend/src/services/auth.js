@@ -61,12 +61,27 @@ function extractUserContext(payload) {
     payload.groups
   ];
 
-  const roles = roleSources.flatMap((value) => {
+  const rawRoles = roleSources.flatMap((value) => {
     if (!value) return [];
     if (Array.isArray(value)) return value;
     if (typeof value === 'string') return [value];
     return [];
   });
+
+  const roleNames = new Map([
+    ['super_admin', 'SUPER_ADMIN'],
+    ['super-admin', 'SUPER_ADMIN'],
+    ['org_admin', 'ORG_ADMIN'],
+    ['org-admin', 'ORG_ADMIN'],
+    ['admin', 'ORG_ADMIN'],
+    ['project_manager', 'PROJECT_MANAGER'],
+    ['project-manager', 'PROJECT_MANAGER'],
+    ['manager', 'PROJECT_MANAGER'],
+    ['member', 'MEMBER']
+  ]);
+  const roles = rawRoles
+    .map((role) => roleNames.get(String(role).toLowerCase()))
+    .filter(Boolean);
 
   return {
     sub: payload.sub,
@@ -74,7 +89,6 @@ function extractUserContext(payload) {
     username: payload.preferred_username || payload.username,
     orgId: orgId ? String(orgId) : null,
     roles: Array.from(new Set(roles)),
-    claims: payload
   };
 }
 

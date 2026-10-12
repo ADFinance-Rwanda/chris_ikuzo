@@ -1,0 +1,197 @@
+openapi: 3.1.0
+info:
+  title: Taskline API
+  version: 1.0.0
+  description: Tenant-scoped project and task API. Tenant comes from signed Keycloak claims, never from the request.
+servers:
+  - url: http://localhost:3000
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        request_id: { type: string }
+    Task:
+      type: object
+      required: [id, organization_id, project_id, title, status, priority, version]
+      properties:
+        id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        title: { type: string, maxLength: 255 }
+        description: { type: string }
+        status: { type: string, enum: [TODO, IN_PROGRESS, DONE] }
+        priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        assignee_id: { type: [string, "null"] }
+        due_date: { type: [string, "null"], format: date-time }
+        version: { type: integer, minimum: 1 }
+    Project:
+      type: object
+      required: [id, organization_id, name, status]
+      properties:
+        id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid }
+        name: { type: string, maxLength: 200 }
+        description: { type: string }
+        status: { type: string, enum: [active, archived] }
+paths:
+  /health:
+    get:
+      security: []
+      responses:
+        "200": { description: Process is alive }
+  /ready:
+    get:
+      security: []
+      responses:
+        "200": { description: Dependencies ready }
+        "503": { description: Dependency unavailable }
+  /api/me:
+    get:
+      summary: Resolve authenticated profile and persist tenant membership
+      responses:
+        "200": { description: Profile }
+        "401": { description: Missing or invalid access token }
+        "403": { description: Missing organization claim or membership mismatch }
+  /api/projects:
+    get:
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { in: query, name: status, schema: { type: string, enum: [active, archived] } }
+      responses:
+        "200": { description: Paginated tenant projects }
+        "401": { description: Unauthorized }
+    post:
+      description: Requires PROJECT_MANAGER or above.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 4000 }
+      responses:
+        "201": { description: Created project }
+        "400": { description: Validation error }
+        "403": { description: Insufficient role }
+  /api/projects/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      responses:
+        "200": { description: Project }
+        "404": { description: Not found within tenant }
+    put:
+      description: Requires ORG_ADMIN or above.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 4000 }
+                status: { type: string, enum: [active, archived] }
+      responses:
+        "200": { description: Updated project }
+        "404": { description: Not found }
+    delete:
+      description: Requires ORG_ADMIN or above; cascades project tasks.
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Not found }
+  /api/tasks:
+    get:
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { in: query, name: status, schema: { type: string, enum: [TODO, IN_PROGRESS, DONE] } }
+        - { in: query, name: priority, schema: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] } }
+        - { in: query, name: project_id, schema: { type: string, format: uuid } }
+        - { in: query, name: assignee_id, schema: { type: string } }
+        - { in: query, name: due_after, schema: { type: string, format: date-time } }
+        - { in: query, name: due_before, schema: { type: string, format: date-time } }
+        - { in: query, name: search, schema: { type: string, maxLength: 200 } }
+      responses:
+        "200": { description: Paginated tasks scoped to the token organization }
+        "400": { description: Validation error }
+        "401": { description: Unauthorized }
+    post:
+      parameters:
+        - { in: header, name: Idempotency-Key, schema: { type: string, maxLength: 255 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, title]
+              properties:
+                project_id: { type: string, format: uuid }
+                title: { type: string, maxLength: 255 }
+                description: { type: string, maxLength: 2000 }
+                status: { type: string, enum: [TODO, IN_PROGRESS, DONE] }
+                priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+                assignee_id: { type: [string, "null"] }
+                due_date: { type: [string, "null"], format: date-time }
+      responses:
+        "201": { description: Created task }
+        "200": { description: Idempotent replay }
+        "409": { description: Idempotency key reused with different request }
+        "400": { description: Validation error }
+        "429": { description: Rate limit exceeded }
+        "503": { description: Rate limiter unavailable }
+  /api/tasks/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+    get:
+      responses:
+        "200": { description: Task }
+        "404": { description: Not found within tenant }
+    put:
+      description: Requires the current version; stale version returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: { type: integer, minimum: 1 }
+                title: { type: string, maxLength: 255 }
+                description: { type: string, maxLength: 2000 }
+                project_id: { type: string, format: uuid }
+                status: { type: string, enum: [TODO, IN_PROGRESS, DONE] }
+                priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+                assignee_id: { type: [string, "null"] }
+                due_date: { type: [string, "null"], format: date-time }
+      responses:
+        "200": { description: Updated task and incremented version }
+        "409": { description: Version conflict }
+        "404": { description: Not found within tenant }
+    delete:
+      description: Requires PROJECT_MANAGER or above.
+      responses:
+        "204": { description: Deleted }
+        "403": { description: Insufficient role }
+  /api/dashboard:
+    get:
+      responses:
+        "200": { description: Tenant/user-scoped analytics }
