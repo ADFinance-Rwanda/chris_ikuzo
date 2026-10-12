@@ -15,5 +15,6 @@ test('ready endpoint declares service readiness based on dependency health', asy
   assert.equal(result.status, 503);
   assert.equal(result.body.status, 'not ready');
   assert.ok(['unavailable', 'PONG'].includes(result.body.redis));
+  assert.ok(['unavailable', 'ok'].includes(result.body.keycloak));
   await new Promise((resolve) => server.close(resolve));
 });
